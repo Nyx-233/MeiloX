@@ -27,6 +27,7 @@ class StableDeckPlayer(
     private var internalQueueUpdateDepth = 0
     internal var onQueueEdited: ((replaced: Boolean) -> Unit)? = null
     internal var onSeekRequested: (() -> Unit)? = null
+    internal var isExternalMediaRequest: (() -> Boolean)? = null
 
     internal fun <T> withInternalQueueUpdate(block: () -> T): T {
         internalQueueUpdateDepth++
@@ -71,6 +72,13 @@ class StableDeckPlayer(
         startIndex: Int,
         startPositionMs: Long,
     ): ListenableFuture<*> {
+        // Selecting an existing queue by media ID must not rebuild it or reset its shuffle order.
+        if (isExternalMediaRequest?.invoke() == true && startIndex in mediaItems.indices &&
+            mediaItems.size == activeDeck.mediaItemCount &&
+            mediaItems.indices.all { mediaItems[it] == activeDeck.getMediaItemAt(it) }
+        ) {
+            return handleSeek(startIndex, startPositionMs, Player.COMMAND_SEEK_TO_MEDIA_ITEM)
+        }
         notifyQueueEdit(replaced = true)
         return super.handleSetMediaItems(mediaItems.map { it.withQueueEntryId() }, startIndex, startPositionMs)
     }

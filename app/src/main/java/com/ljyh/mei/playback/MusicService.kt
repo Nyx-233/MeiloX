@@ -466,6 +466,9 @@ class MusicService : MediaLibraryService(),
             )
             .setBitmapLoader(CoilBitmapLoader(this, singletonImageLoader))
             .build()
+        player.isExternalMediaRequest = {
+            mediaSession.controllerForCurrentRequest?.controllerVersion == MediaSession.ControllerInfo.LEGACY_CONTROLLER_VERSION
+        }
 
 
         scope.launch {
@@ -1145,6 +1148,9 @@ class MusicService : MediaLibraryService(),
             controller: MediaSession.ControllerInfo,
         ): ListenableFuture<MediaSession.ConnectionResult> {
             val result = MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
+            if (controller.controllerVersion == MediaSession.ControllerInfo.LEGACY_CONTROLLER_VERSION) {
+                result.setAvailablePlayerCommands(externalTransportCommands(result.build().availablePlayerCommands))
+            }
             if (!controller.isTrusted && controller.packageName != packageName) {
                 return Futures.immediateFuture(result.build())
             }
@@ -1153,6 +1159,24 @@ class MusicService : MediaLibraryService(),
                 .add(SessionCommand(NOTIFICATION_RIGHT_COMMAND, Bundle.EMPTY))
                 .build()
             return Futures.immediateFuture(result.setAvailableSessionCommands(commands).build())
+        }
+
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            if (controller.controllerVersion == MediaSession.ControllerInfo.LEGACY_CONTROLLER_VERSION) {
+                externalQueueSelection(player, mediaItems, startPositionMs)?.let {
+                    return Futures.immediateFuture(it)
+                }
+            }
+            if (!controller.isTrusted && controller.packageName != packageName) {
+                return Futures.immediateFailedFuture(UnsupportedOperationException("Only existing queue items may be selected"))
+            }
+            return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
         }
 
         override fun onCustomCommand(
@@ -1553,4 +1577,33 @@ class MusicService : MediaLibraryService(),
         const val ACTION_PREVIOUS = "com.ljyh.mei.action.PREVIOUS"
         const val ACTION_NEXT = "com.ljyh.mei.action.NEXT"
     }
+}
+
+/** Legacy companion devices may control transport without gaining queue-edit or account commands. */
+internal fun externalTransportCommands(defaults: Player.Commands): Player.Commands = defaults.buildUpon()
+    .addAll(
+        Player.COMMAND_PLAY_PAUSE,
+        Player.COMMAND_PREPARE,
+        Player.COMMAND_STOP,
+        Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+        Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+        Player.COMMAND_SEEK_TO_PREVIOUS,
+        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+        Player.COMMAND_SEEK_TO_NEXT,
+        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+        Player.COMMAND_SET_MEDIA_ITEM,
+    ).build()
+
+internal fun externalQueueSelection(
+    player: Player,
+    requested: List<MediaItem>,
+    startPositionMs: Long,
+): MediaSession.MediaItemsWithStartPosition? {
+    if (requested.size != 1) return null
+    val index = (0 until player.mediaItemCount).firstOrNull {
+        player.getMediaItemAt(it).mediaId == requested.single().mediaId
+    } ?: return null
+    return MediaSession.MediaItemsWithStartPosition(
+        List(player.mediaItemCount, player::getMediaItemAt), index, startPositionMs,
+    )
 }
